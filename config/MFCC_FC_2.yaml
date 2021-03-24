@@ -4,7 +4,7 @@ feature: 'MFCC' # MFCC, <LMSPC>
 ---
 model:
   type: 'FC' #  FC, DAE
-  version : 1
+  version : 2
   channels : 2 # noisy, hat_speech, [hat_noise]
   context : 3  # ( conext...  target conext... )
   fbank : 13
@@ -46,4 +46,4 @@ data:
   root: '/home/data/kbh/MCFE/'
 ---
 log:
-  root: '/home/nas/user/kbh/'
+  root: '/home/nas/user/kbh/MCFE/'

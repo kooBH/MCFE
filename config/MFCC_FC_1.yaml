@@ -46,4 +46,4 @@ data:
   root: '/home/data/kbh/MCFE/'
 ---
 log:
-  root: '/home/nas/user/kbh/'
+  root: '/home/nas/user/kbh/MCFE/'
