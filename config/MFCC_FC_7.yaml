@@ -1,0 +1,49 @@
+gpu: 'cuda:1'
+---
+feature: 'MFCC' # MFCC, <LMSPC>
+---
+model:
+  type: 'FC' #  FC, DAE
+  version : 7
+  channels : 2 # noisy, hat_speech, [hat_noise]
+  context : 3  # ( conext...  target conext... )
+  fbank : 13
+---
+train:
+  epoch: 125
+  batch_size: 128
+  num_workers: 16
+  summary_interval: 10
+  validation_interval: 100
+  checkpoint_interval: 1000
+---
+loss:
+  type: 'MSE' # MSE, L1
+---
+optim:
+  type: "Adam" # Adam
+  adam: 0.0001
+  adabound:
+    initial: 0.001
+    final: 0.05
+---
+scheduler: 
+  type: 'Plateau' # Plateau, oneCycle, None
+  oneCycle:
+    max_lr: 0.0001
+  Plateau:
+    mode: 'min'
+    patience: 2
+    factor: 0.5
+    min_lr: 0.000005
+---
+audio:
+  frame : 400
+  shift : 160
+  samplerate : 16000
+---
+data:
+  root: '/home/data/kbh/MCFE/'
+---
+log:
+  root: '/home/nas/user/kbh/MCFE/'

@@ -6,7 +6,7 @@ class dataset(torch.utils.data.Dataset):
     def __init__(self, root,target,form, train=True,context=3,channels=2):
         self.root = root
         self.context = context
-        self.context_length = 2*context+1
+        self.context_length = context
         self.train = train
         self.channels = channels
 
@@ -41,14 +41,36 @@ class dataset(torch.utils.data.Dataset):
 
         length = pt_noisy.shape[0]
 
-        start_idx = np.random.randint(low=0,high = length - self.context_length)
+        center_idx = np.random.randint(low=0,high = length)
+        # [ context ...  target ... context ]
+        ## No need to pad
+        if center_idx >= self.context_length and center_idx < length - self.context_length :
+            pt_noisy = pt_noisy[center_idx-self.context_length:center_idx + self.context_length+1,:]
+            pt_estim = pt_estim[center_idx-self.context_length:center_idx + self.context_length+1,:]
+            if self.channels == 3 :
+                pt_noise = pt_noise[center_idx-self.context_length:center_idx + self.context_length+1,:]
+        ## padding on head
+        elif center_idx < self.context_length :
+            shortage = self.context_length - center_idx
+            pad = torch.zeros(shortage,pt_noisy.shape[1])
+            
+            pt_noisy = torch.cat((pad,pt_noisy[center_idx -self.context_length+shortage:center_idx+self.context_length+1,:]),dim=0)
+            pt_estim = torch.cat((pad,pt_estim[center_idx-self.context_length+shortage:center_idx+self.context_length+1]),dim=0)
+            if self.channels == 3 :
+                pt_noise= torch.cat((pad,pt_noisy[center_idx-self.context_length+shortage:center_idx+self.context_length+1,:]),dim=0)
+        ## padding on tail
+        elif center_idx >= length - self.context_length :
+            shortage = center_idx - length + self.context_length + 1
+            pad = torch.zeros(shortage,pt_noisy.shape[1])
+            pt_noisy = torch.cat((pt_noisy[center_idx -self.context_length:length,:],pad),dim=0)
+            pt_estim = torch.cat((pt_estim[center_idx-self.context_length:length,:],pad),dim=0)
+            if self.channels == 3 :
+                pt_noise= torch.cat((pt_noisy[center_idx-self.context_length:length,:],pad),dim=0)
+        else :
+            raise Exception("center_idx")
 
-        pt_noisy = pt_noisy[start_idx:start_idx + self.context_length,:]
-        pt_estim = pt_estim[start_idx:start_idx + self.context_length,:]
-        if self.channels == 3 :
-            pt_noise = pt_noise[start_idx:start_idx + self.context_length,:]
         if self.train : 
-            pt_clean = pt_clean[start_idx + self.context ,:]
+            pt_clean = pt_clean[center_idx,:]
 
         input=None        
         if self.channels == 3 :

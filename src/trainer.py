@@ -37,7 +37,7 @@ if __name__ == '__main__':
     context = hp.model.context
     num_epochs = hp.train.epoch
     num_workers = hp.train.num_workers
-    best_loss = 10
+    best_loss = 100000
 
     ## dirs
 
