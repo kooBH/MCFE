@@ -19,7 +19,7 @@ class FC(nn.Module):
 
         # DBN
         if self.version == 1:
-            node_size = 1024
+            node_size = 1025
             self.seq = nn.Sequential(
                 nn.Linear(self.input_size,node_size),
                 nn.BatchNorm1d(node_size),

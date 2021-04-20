@@ -34,8 +34,9 @@ class dataset(torch.utils.data.Dataset):
 
         # (Time, MFCC)
         pt_noisy = torch.load(self.root + '/noisy/'+path+'.pt')
-        pt_estim = torch.load(self.root + '/estim/'+path+'.pt')
-        if self.channels == 3 :
+        if self.channels >= 2 :
+            pt_estim = torch.load(self.root + '/estim/'+path+'.pt')
+        if self.channels >= 3 :
             pt_noise = torch.load(self.root + '/noise/'+path+'.pt')
         pt_clean = None
         if self.train : 
@@ -49,34 +50,38 @@ class dataset(torch.utils.data.Dataset):
             ## No need to pad
             if center_idx >= self.context_length and center_idx < length - self.context_length :
                 pt_noisy = pt_noisy[center_idx-self.context_length:center_idx + self.context_length+1,:]
-                pt_estim = pt_estim[center_idx-self.context_length:center_idx + self.context_length+1,:]
-                if self.channels == 3 :
+                if self.channels >= 2  :
+                    pt_estim = pt_estim[center_idx-self.context_length:center_idx + self.context_length+1,:]
+                if self.channels >= 3 :
                     pt_noise = pt_noise[center_idx-self.context_length:center_idx + self.context_length+1,:]
             ## padding on head
             elif center_idx < self.context_length :
                 shortage = self.context_length - center_idx
                 pad = torch.zeros(shortage,pt_noisy.shape[1])
-                
                 pt_noisy = torch.cat((pad,pt_noisy[center_idx -self.context_length+shortage:center_idx+self.context_length+1,:]),dim=0)
-                pt_estim = torch.cat((pad,pt_estim[center_idx-self.context_length+shortage:center_idx+self.context_length+1]),dim=0)
-                if self.channels == 3 :
+                if self.channels >= 2 :
+                    pt_estim = torch.cat((pad,pt_estim[center_idx-self.context_length+shortage:center_idx+self.context_length+1]),dim=0)
+                if self.channels >= 3 :
                     pt_noise= torch.cat((pad,pt_noisy[center_idx-self.context_length+shortage:center_idx+self.context_length+1,:]),dim=0)
             ## padding on tail
             elif center_idx >= length - self.context_length :
                 shortage = center_idx - length + self.context_length + 1
                 pad = torch.zeros(shortage,pt_noisy.shape[1])
                 pt_noisy = torch.cat((pt_noisy[center_idx -self.context_length:length,:],pad),dim=0)
-                pt_estim = torch.cat((pt_estim[center_idx-self.context_length:length,:],pad),dim=0)
-                if self.channels == 3 :
+                if self.channels >= 2 :
+                    pt_estim = torch.cat((pt_estim[center_idx-self.context_length:length,:],pad),dim=0)
+                if self.channels >= 3 :
                     pt_noise= torch.cat((pt_noisy[center_idx-self.context_length:length,:],pad),dim=0)
             else :
                 raise Exception("center_idx")
             
         input=None        
-        if self.channels == 3 :
-            input = torch.stack((pt_noisy,pt_estim,pt_noise),0)
-        else :
+        if self.channels == 1 :
+            input = pt_noisy
+        elif self.channels == 2:
             input = torch.stack((pt_noisy,pt_estim),0)
+        elif self.channels == 3 :
+            input = torch.stack((pt_noisy,pt_estim,pt_noise),0)
 
         data = None
         if self.train : 
