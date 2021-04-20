@@ -1,79 +1,189 @@
 import torch
 import argparse
-import numpy as np
 import torchaudio
 import os
-import sys
-import glob
-from dataset.TestsetModel import TestsetModel
-from model.Model import Model
-from utils.hparams import HParam
+import numpy as np
+from kaldiio import WriteHelper
 
 from tqdm import tqdm
+from tensorboardX import SummaryWriter
+
+from model.FC import FC
+import dataset.Dataset as data
+
+from utils.hparams import HParam
+from utils.writer import MyWriter
 
 if __name__ == '__main__':
-
     parser = argparse.ArgumentParser()
-    parser.add_argument('-c','--config',type=str,required=True)
-    parser.add_argument('-m','--model',type=str,default='./model_ckpt/bestmodel.pth')
-    parser.add_argument('-o','--output_dir',type=str,required=True)
+    parser.add_argument('--config', '-c', type=str, required=True,
+                        help="yaml for configuration")
+    parser.add_argument('--chkpt',type=str,required=True)
+    parser.add_argument('--outpath','-o',type=str,required=True)
     args = parser.parse_args()
 
-    ## Parameters 
     hp = HParam(args.config)
-    print('NOTE::Loading configuration :: ' + args.config)
+    print("NOTE::Loading configuration : "+args.config)
 
-    device = hp.gpu
-    torch.cuda.set_device(device)
+    ## Parameters
+    device = "cpu"
+    #torch.cuda.set_device(device)
+    batch_size = 1 
+    channels = hp.model.channels
+    context = hp.model.context
+    num_epochs = hp.train.epoch
+    num_workers = hp.train.num_workers
+    fbank = hp.model.fbank
 
-    num_epochs = 1
-    batch_size = 1
-    test_model = args.model
-    win_len = hp.audio.frame
+    ## Data
+    list_dt05_simu = ['dt05_bus_simu','dt05_caf_simu','dt05_ped_simu','dt05_str_simu']
+    list_dt05_real = ['dt05_bus_real','dt05_caf_real','dt05_ped_real','dt05_str_real']
+    list_et05_simu = ['et05_bus_simu','et05_caf_simu','et05_ped_simu','et05_str_simu']
+    list_et05_real = ['et05_bus_real','et05_caf_real','et05_ped_real','et05_str_real']
 
-    window=torch.hann_window(window_length=int(win_len), periodic=True, dtype=None, layout=torch.strided, device=None, requires_grad=False).to(device)
- 
-    ## dirs 
-    output_dir = args.output_dir
-    os.makedirs(output_dir,exist_ok=True)
+    inference_dataset  = None
 
-    ## Dataset
-    # TODO ?
-    test_dataset = TestsetModel(hp.data.root,hp)
-    test_loader = torch.utils.data.DataLoader(dataset=test_dataset,batch_size=1,shuffle=False,num_workers=1)
+    if hp.feature == 'MFCC':
+        inference_dataset  = [
+            data.dataset(hp.data.root+'/MFCC/',list_dt05_simu,'*.pt',context=context,channels=channels,train=False),
+            data.dataset(hp.data.root+'/MFCC/',list_dt05_real,'*.pt',context=context,channels=channels,train=False),
+            data.dataset(hp.data.root+'/MFCC/',list_et05_simu,'*.pt',context=context,channels=channels,train=False),
+            data.dataset(hp.data.root+'/MFCC/',list_et05_real,'*.pt',context=context,channels=channels,train=False)
+        ]
+    elif hp.feature == "LMPSC":
+            inference_dataset  = [
+            data.dataset(hp.data.root+'/LMPSC/',list_dt05_simu,'*.pt',context=context,channels=channels,train=False),
+            data.dataset(hp.data.root+'/LMPSC/',list_dt05_real,'*.pt',context=context,channels=channels,train=False),
+            data.dataset(hp.data.root+'/LMPSC/',list_et05_simu,'*.pt',context=context,channels=channels,train=False),
+            data.dataset(hp.data.root+'/LMPSC/',list_et05_real,'*.pt',context=context,channels=channels,train=False)
+        ]
+    else :
+        raise Exception('feature type is not available')
+
+    inference_loader = [
+        torch.utils.data.DataLoader(dataset=inference_dataset[0],batch_size=batch_size,shuffle=False,num_workers=num_workers),
+        torch.utils.data.DataLoader(dataset=inference_dataset[1],batch_size=batch_size,shuffle=False,num_workers=num_workers),
+        torch.utils.data.DataLoader(dataset=inference_dataset[2],batch_size=batch_size,shuffle=False,num_workers=num_workers),
+        torch.utils.data.DataLoader(dataset=inference_dataset[3],batch_size=batch_size,shuffle=False,num_workers=num_workers),
+    ]
 
     ## Model
-    # TODO
-    model = Model().to(device)
+    model = None
+    if hp.model.type == 'FC': 
+        model = FC(hp).to(device)
+    else :
+        raise Exception("Model == None")
 
-    model.load_state_dict(torch.load(test_model,map_location=device))
+    print('NOTE::Loading pre-trained model : '+ args.chkpt)
+    model.load_state_dict(torch.load(args.chkpt, map_location=device))
+
+    version = args.config.split('/')
+    version = version[-1].split('.')[0]
+
+    writer = None
+
+    ##  params
+    cnt = 0
+    idx_category = 0
+    list_category= [
+        'dt05_simu',
+        'dt05_real',
+        'et05_simu',
+        'et05_real'
+    ]
+    # Need to create ${nj_MFCC} of ark,scp pairs
+    nj_MFCC = 8
+
+    ## Inference
     model.eval()
-    print('NOTE::Loading pre-trained model : ' + test_model)
-
-
     with torch.no_grad():
-        for i, (data,data_dir,data_name) in enumerate(tqdm(test_loader)):
-            # TODO
-            data_input = data.to(device)
-            data_output = model(data_input)
+        for i in inference_loader :
+            len_dataset = len(i)
+            cur_category = list_category[idx_category]
+            idx_category+=1
+            max_item = int(len_dataset / nj_MFCC)
+            if len_dataset % nj_MFCC != 0 :
+                raise Exception('len_dataset must be devided by nj')
+            ver = 1
+            cnt = 0
 
-            auido = torch.istft(data_output,n_fft=hp.audio.frame, hop_length = hp.audio.shift, window=window,center =True, normalized=False,onesided=True,length=int(length)*hp.audio.shift)
+            for j, data in enumerate(tqdm(i,desc=cur_category)):
+                length = data['input'].shape[2]
+                # [1, channels, length, fbank]
+                input = data['input']            
+                output = None
 
-            audio = audio.to('cpu')
+    #            print('input shape 1 : ' + str(input.shape))
 
-            # TODO
-            ## Normalize
-            max_val = torch.max(torch.abs(audio_me_pe))
-            audio_me_pe = audio_me_pe/max_val
+                ## run for a sample
+                for k in range(length) :
+                    ## padding on head
+                    if k < context : 
+                        shortage = context - k
+                        pad = torch.zeros(1,channels,shortage,fbank)
+                        input_tmp = torch.cat((pad,input[:,:,k - context +shortage:k+context+1,:]),dim=2)
+                        # padding on tail
+                    elif k >= length - context :
+                        shortage = k - length +context + 1
+        #                   print('shortage : ' + str(shortage))
+                        pad = torch.zeros(1,channels,shortage,fbank)
 
-            ## Save
-            torchaudio.save(output_dir+'/'+str(data_dir[0])+'/'+str(data_name[0])+'.wav',src=audio,sample_rate=hp.audio.samplerate)
+        #                   print(input[:,:,k-context:length,:].shape)
+        #                  print(pad.shape)
 
+                        input_tmp = torch.cat((input[:,:,k-context:length,:],pad),dim=2)
+        #                   print(input_tmp.shape)
+                    else :
+                        input_tmp = input[:,:,k-context:k+context+1,:]
 
+                    input_tmp = input_tmp.to(device)
+                    #print('input shape 2 : ' + str(input.shape))
+                    output_frame = model(input_tmp)
 
+    #                print(str(k)+': ' + str(input_tmp.shape))
 
+                    if output == None :
+                        # init
+                        output = output_frame
+    #                    print('output shape : ' + str(output_frame.shape))
+                    else :
+                        # concat
+                        output  = torch.cat((output,output_frame),dim=0)
+    #                   print('output shape : ' + str(output.shape))
+                
+                ## save as kaldi data type
 
+                # name e.g. : F01_050C0101_PED_REAL
+                name = data['name'][0]
+                category = data['category'][0]
+                category = category.split('_')
+                real_simu = category[2].upper()
+                category = category[0]+'_'+category[2]
+                name = name + '_'+real_simu
+                output = output.to(device)
 
+                os.makedirs(args.outpath,exist_ok=True)
+                #torch.save(output,args.outpath+'/'+name+'.pt')
 
+                output = output.numpy()
 
-   
+                ## kaldi MFCC with 13 fbank
+                if hp.feature == 'LMPSC':
+                    # TODO
+                    pass
+                if fbank > 13 :
+                    # TODO
+                    pass
+
+                # ark,scp for each category
+                # after 250 samples, new ark,scp
+                if cnt == 0 :
+                    filename= 'ark,scp:'+args.outpath+'/raw_mfcc_'+cur_category+'_'+version+'.'+str(ver)+'.ark,'+args.outpath+'/raw_mfcc_'+cur_category+'_'+version+'.'+str(ver)+'.scp'
+                    writer= WriteHelper(filename,compression_method=2)
+
+                writer(name,output)
+                cnt += 1
+
+                if cnt> max_item :
+                    cnt = 0
+                    ver +=1
