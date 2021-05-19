@@ -158,14 +158,39 @@ if __name__ == '__main__':
             if hp.scheduler.type == 'Plateau' :
                 scheduler.step(test_loss)
 
-            #input_audio = wav_noisy[0].cpu().numpy()
-            #target_audio= wav_clean[0].cpu().numpy()
-            #audio_me_pe= audio_me_pe[0].cpu().numpy()
-
             writer.log_value(loss,step,"test_"+hp.loss.type)
-            writer.log_MFCC(input[0],output[0],target[0],step)
-            #input_audio,target_audio,audio_me_pe)
-    
+
+            ## MFCC plot for a sample
+            sample_input = test_dataset.load_sample()
+            sample_input = torch.unsqueeze(sample_input,0)
+            sample_length = sample_input.shape[2]
+            sample_output = None
+            ## run for a sample
+                for k in range(length) :
+                    if k < context : 
+                        shortage = context - k
+                        pad = torch.zeros(1,channels,shortage,fbank)
+                        sample_input_tmp = torch.cat((pad,sample_input[:,:,k - context +shortage:k+context+1,:]),dim=2)
+                    elif k >= length - context :
+                        shortage = k - length +context + 1
+                        pad = torch.zeros(1,channels,shortage,fbank)
+                        sample_input_tmp = torch.cat((sample_input[:,:,k-context:length,:],pad),dim=2)
+                    else :
+                        sample_input_tmp = sample_input[:,:,k-context:k+context+1,:]
+
+                    sample_input_tmp = sample_input_tmp.to(device)
+                    # inference
+                    sample_output_frame = model(sample_input_tmp)
+                    # init
+                    if sample_output == None :
+                        sample_output = sample_output_frame
+                    # concat
+                    else :
+                        sample_output  = torch.cat((sample_output,sample_output_frame),dim=0)
+
+            writer.log_MFCC(sample_input[0][0],'noisy',step)
+            writer.log_MFCC(sample_input[0][1],'estimated',step)
+            writer.log_MFCC(sample_output[0],'enhanced',step)
 
             if best_loss > test_loss:
                 torch.save(model.state_dict(), str(modelsave_path)+'/bestmodel.pt')

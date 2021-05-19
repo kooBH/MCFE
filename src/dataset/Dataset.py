@@ -62,7 +62,7 @@ class dataset(torch.utils.data.Dataset):
                 if self.channels >= 2 :
                     pt_estim = torch.cat((pad,pt_estim[center_idx-self.context_length+shortage:center_idx+self.context_length+1]),dim=0)
                 if self.channels >= 3 :
-                    pt_noise= torch.cat((pad,pt_noisy[center_idx-self.context_length+shortage:center_idx+self.context_length+1,:]),dim=0)
+                    pt_noise= torch.cat((pad,pt_noise[center_idx-self.context_length+shortage:center_idx+self.context_length+1,:]),dim=0)
             ## padding on tail
             elif center_idx >= length - self.context_length :
                 shortage = center_idx - length + self.context_length + 1
@@ -71,18 +71,20 @@ class dataset(torch.utils.data.Dataset):
                 if self.channels >= 2 :
                     pt_estim = torch.cat((pt_estim[center_idx-self.context_length:length,:],pad),dim=0)
                 if self.channels >= 3 :
-                    pt_noise= torch.cat((pt_noisy[center_idx-self.context_length:length,:],pad),dim=0)
+                    pt_noise= torch.cat((pt_noise[center_idx-self.context_length:length,:],pad),dim=0)
             else :
                 raise Exception("center_idx")
             
+            if self.train : 
+                pt_clean = pt_clean[center_idx,:]
+            
         input=None        
         if self.channels == 1 :
-            input = pt_noisy
+            input = torch.unsqueeze(pt_noisy,0)
         elif self.channels == 2:
             input = torch.stack((pt_noisy,pt_estim),0)
         elif self.channels == 3 :
             input = torch.stack((pt_noisy,pt_estim,pt_noise),0)
-
         data = None
         if self.train : 
             data = {"input":input,"target":pt_clean}
@@ -95,3 +97,27 @@ class dataset(torch.utils.data.Dataset):
 
     def __len__(self):
         return len(self.data_list)
+
+    def load_sample(self):
+        path = self.data_list[0]
+
+        # (Time, MFCC)
+        pt_noisy = torch.load(self.root + '/noisy/'+path+'.pt')
+        if self.channels >= 2 :
+            pt_estim = torch.load(self.root + '/estim/'+path+'.pt')
+        if self.channels >= 3 :
+            pt_noise = torch.load(self.root + '/noise/'+path+'.pt')
+        pt_clean = None
+        if self.train : 
+            pt_clean = torch.load(self.root + '/clean/'+path+'.pt')
+
+        input=None        
+        if self.channels == 1 :
+            raise Exception('channels == 1')
+        elif self.channels == 2:
+            input = torch.stack((pt_noisy,pt_estim),0)
+        elif self.channels == 3 :
+            input = torch.stack((pt_noisy,pt_estim,pt_noise),0)
+
+        return input
+
