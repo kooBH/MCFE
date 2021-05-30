@@ -9,6 +9,8 @@ from tqdm import tqdm
 from tensorboardX import SummaryWriter
 
 from model.FC import FC
+from model.SKDAE import SKDAE
+
 import dataset.Dataset as data
 
 from utils.hparams import HParam
@@ -19,6 +21,7 @@ if __name__ == '__main__':
     parser.add_argument('--config', '-c', type=str, required=True,
                         help="yaml for configuration")
     parser.add_argument('--chkpt',type=str,required=True)
+    parser.add_argument('--device','-d',type=str,required=False,default='cuda:0')
     parser.add_argument('--outpath','-o',type=str,required=True)
     args = parser.parse_args()
 
@@ -26,14 +29,14 @@ if __name__ == '__main__':
     print("NOTE::Loading configuration : "+args.config)
 
     ## Parameters
-    device = "cpu"
+    device = args.device
     #torch.cuda.set_device(device)
     batch_size = 1 
-    channels = hp.model.channels
     context = hp.model.context
     num_epochs = hp.train.epoch
     num_workers = hp.train.num_workers
-    fbank = hp.model.fbank
+    feature_size = hp.model.feature_size
+    channels = 3
 
     ## Data
     list_dt05_simu = ['dt05_bus_simu','dt05_caf_simu','dt05_ped_simu','dt05_str_simu']
@@ -45,17 +48,17 @@ if __name__ == '__main__':
 
     if hp.feature == 'MFCC':
         inference_dataset  = [
-            data.dataset(hp.data.root+'/MFCC/',list_dt05_simu,'*.pt',context=context,channels=channels,train=False),
-            data.dataset(hp.data.root+'/MFCC/',list_dt05_real,'*.pt',context=context,channels=channels,train=False),
-            data.dataset(hp.data.root+'/MFCC/',list_et05_simu,'*.pt',context=context,channels=channels,train=False),
-            data.dataset(hp.data.root+'/MFCC/',list_et05_real,'*.pt',context=context,channels=channels,train=False)
+            data.dataset(hp.data.inference,context=context,inference = list_dt05_simu),
+            data.dataset(hp.data.inference,context=context,inference = list_et05_simu),
+            data.dataset(hp.data.inference,context=context,inference = list_dt05_real),
+            data.dataset(hp.data.inference,context=context,inference = list_et05_real)
         ]
     elif hp.feature == "LMPSC":
             inference_dataset  = [
-            data.dataset(hp.data.root+'/LMPSC/',list_dt05_simu,'*.pt',context=context,channels=channels,train=False),
-            data.dataset(hp.data.root+'/LMPSC/',list_dt05_real,'*.pt',context=context,channels=channels,train=False),
-            data.dataset(hp.data.root+'/LMPSC/',list_et05_simu,'*.pt',context=context,channels=channels,train=False),
-            data.dataset(hp.data.root+'/LMPSC/',list_et05_real,'*.pt',context=context,channels=channels,train=False)
+            data.dataset(hp.data.root+'/LMPSC/inference/',list_dt05_simu,context=context,inference=True),
+            data.dataset(hp.data.root+'/LMPSC/inference/',list_dt05_real,context=context,inference=True),
+            data.dataset(hp.data.root+'/LMPSC/inference/',list_et05_simu,context=context,inference=True),
+            data.dataset(hp.data.root+'/LMPSC/inference/',list_et05_real,context=context,inference=True)
         ]
     else :
         raise Exception('feature type is not available')
@@ -71,8 +74,10 @@ if __name__ == '__main__':
     model = None
     if hp.model.type == 'FC': 
         model = FC(hp).to(device)
+    elif hp.model.type == 'SKDAE':
+        model = SKDAE(hp).to(device)
     else :
-        raise Exception("Model == None")
+        raise Exception("hp.model.type unknown")
 
     print('NOTE::Loading pre-trained model : '+ args.chkpt)
     model.load_state_dict(torch.load(args.chkpt, map_location=device))
@@ -109,7 +114,7 @@ if __name__ == '__main__':
 
             for j, data in enumerate(tqdm(i,desc=cur_category)):
                 length = data['input'].shape[2]
-                # [1, channels, length, fbank]
+                # [1, channels, length, feature_size]
                 input = data['input']            
                 output = None
 
@@ -120,13 +125,13 @@ if __name__ == '__main__':
                     ## padding on head
                     if k < context : 
                         shortage = context - k
-                        pad = torch.zeros(1,channels,shortage,fbank)
+                        pad = torch.zeros(1,channels,shortage,feature_size)
                         input_tmp = torch.cat((pad,input[:,:,k - context +shortage:k+context+1,:]),dim=2)
                         # padding on tail
                     elif k >= length - context :
                         shortage = k - length +context + 1
         #                   print('shortage : ' + str(shortage))
-                        pad = torch.zeros(1,channels,shortage,fbank)
+                        pad = torch.zeros(1,channels,shortage,feature_size)
 
         #                   print(input[:,:,k-context:length,:].shape)
         #                  print(pad.shape)
@@ -165,13 +170,13 @@ if __name__ == '__main__':
                 os.makedirs(args.outpath,exist_ok=True)
                 #torch.save(output,args.outpath+'/'+name+'.pt')
 
-                output = output.numpy()
+                output = output.detach().cpu().numpy()
 
-                ## kaldi MFCC with 13 fbank
+                ## kaldi MFCC with 13 feature_size
                 if hp.feature == 'LMPSC':
                     # TODO
                     pass
-                if fbank > 13 :
+                if feature_size > 13 :
                     # TODO
                     pass
 

@@ -7,14 +7,11 @@ import numpy as np
 from tensorboardX import SummaryWriter
 
 from model.FC import FC
+from model.SKDAE import SKDAE
 import dataset.Dataset as data
 
 from utils.hparams import HParam
 from utils.writer import MyWriter
-
-def spec_to_wav(complex_ri, window, length):
-    audio = torch.istft(input= complex_ri, n_fft=int(1024), hop_length=int(256), win_length=int(1024), window=window, center=True, normalized=False, onesided=True, length=length)
-    return audio
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -24,20 +21,22 @@ if __name__ == '__main__':
                         help="version of current training")
     parser.add_argument('--chkpt',type=str,required=False,default=None)
     parser.add_argument('--step','-s',type=int,required=False,default=0)
+    parser.add_argument('--device','-d',type=str,required=False,default='cuda:0')
     args = parser.parse_args()
 
     hp = HParam(args.config)
     print("NOTE::Loading configuration : "+args.config)
 
     ## Parameters
-    device = hp.gpu
+    device = args.device
     torch.cuda.set_device(device)
     batch_size = hp.train.batch_size
-    channels = hp.model.channels
     context = hp.model.context
     num_epochs = hp.train.epoch
     num_workers = hp.train.num_workers
     best_loss = 100000
+    channels = 3
+    feature_size = hp.model.feature_size
 
     ## dirs
 
@@ -51,18 +50,13 @@ if __name__ == '__main__':
     writer = MyWriter(hp, log_dir)
 
     ## Data
-    list_train= ['tr05_bus_simu','tr05_caf_simu','tr05_ped_simu','tr05_str_simu']
-    list_test= ['dt05_bus_simu','dt05_caf_simu','dt05_ped_simu','dt05_str_simu','et05_bus_simu','et05_caf_simu','et05_ped_simu','et05_str_simu']
-
+    SNRs= hp.data.SNR
     train_dataset = None
     test_dataset  = None
 
     if hp.feature == 'MFCC':
-        train_dataset = data.dataset(hp.data.root+'/MFCC/',list_train,'*.pt',context=context,channels=channels)
-        test_dataset  = data.dataset(hp.data.root+'/MFCC/',list_test,'*.pt',context=context,channels=channels)
-    elif hp.feature == "LMPSC":
-        train_dataset = data.dataset(hp.data.root+'/LMPSC/',list_train,'*.pt',context=context,channels=channels)
-        test_dataset  = data.dataset(hp.data.root+'/LMPSC/',list_test,'*.pt',context=context,channels=channels)
+        train_dataset = data.dataset(hp.data.root+'/MFCC/train/',SNRs,context=context)
+        test_dataset= data.dataset(hp.data.root+'/MFCC/test/',SNRs,context=context)
     else :
         raise Exception('feature type is not available')
 
@@ -73,6 +67,8 @@ if __name__ == '__main__':
     model = None
     if hp.model.type == 'FC': 
         model = FC(hp).to(device)
+    elif hp.model.type == 'SKDAE':
+        model = SKDAE(hp).to(device)
     else :
         raise Exception("Model == None")
 
@@ -122,17 +118,20 @@ if __name__ == '__main__':
             step +=1
             input = batch_data['input'].to(device)
             target = batch_data['target'].to(device)
+            #mask = model(input)
+            #output = input[:,target_idx,context,:]*mask
             output = model(input)
 
             loss = criterion(output,target).to(device)
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-            print('TRAIN::Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}'.format(epoch+1, num_epochs, i+1, len(train_loader), loss.item()))
             train_loss+=loss.item()
 
             if step %  hp.train.summary_interval == 0:
                 writer.log_value(loss,step,"train_"+hp.loss.type)
+
+        print('TRAIN::Epoch [{}/{}], Step {}, Loss: {:.4f}'.format(epoch+1, num_epochs, step,loss.item()))
 
         train_loss = train_loss/len(train_loader)
         torch.save(model.state_dict(), str(modelsave_path)+'/lastmodel.pt')
@@ -147,50 +146,64 @@ if __name__ == '__main__':
             for j, (batch_data) in enumerate(test_loader):
                 input = batch_data['input'].to(device)
                 target = batch_data['target'].to(device)
+                #mask = model(input)
+                #output = input[:,target_idx,context,:]*mask
                 output = model(input)
 
                 loss = criterion(output,target).to(device)
 
-                print('TEST::Epoch [{}/{}], Step [{}/{}], Loss: {:.4f}'.format(epoch+1, num_epochs, j+1, len(test_loader), loss.item()))
                 test_loss +=loss.item()
 
             test_loss = test_loss/len(test_loader)
             if hp.scheduler.type == 'Plateau' :
                 scheduler.step(test_loss)
 
+            print('TEST::Epoch [{}/{}], Loss: {:.4f}'.format(epoch+1, num_epochs, loss.item()))
+
             writer.log_value(loss,step,"test_"+hp.loss.type)
 
             ## MFCC plot for a sample
-            sample_input = test_dataset.load_sample()
+            sample_input,sample_clean = test_dataset.load_sample()
             sample_input = torch.unsqueeze(sample_input,0)
             sample_length = sample_input.shape[2]
             sample_output = None
+            sample_mask = None
             ## run for a sample
-                for k in range(length) :
-                    if k < context : 
-                        shortage = context - k
-                        pad = torch.zeros(1,channels,shortage,fbank)
-                        sample_input_tmp = torch.cat((pad,sample_input[:,:,k - context +shortage:k+context+1,:]),dim=2)
-                    elif k >= length - context :
-                        shortage = k - length +context + 1
-                        pad = torch.zeros(1,channels,shortage,fbank)
-                        sample_input_tmp = torch.cat((sample_input[:,:,k-context:length,:],pad),dim=2)
-                    else :
-                        sample_input_tmp = sample_input[:,:,k-context:k+context+1,:]
+            for k in range(sample_length) :
+                if k < context : 
+                    shortage = context - k
+                    pad = torch.zeros(1,channels,shortage,feature_size)
+                    sample_input_tmp = torch.cat((pad,sample_input[:,:,k - context +shortage:k+context+1,:]),dim=2)
+                elif k >= sample_length - context :
+                    shortage = k - sample_length +context + 1
+                    pad = torch.zeros(1,channels,shortage,feature_size)
+                    sample_input_tmp = torch.cat((sample_input[:,:,k-context:sample_length,:],pad),dim=2)
+                else :
+                    sample_input_tmp = sample_input[:,:,k-context:k+context+1,:]
 
-                    sample_input_tmp = sample_input_tmp.to(device)
-                    # inference
-                    sample_output_frame = model(sample_input_tmp)
-                    # init
-                    if sample_output == None :
-                        sample_output = sample_output_frame
-                    # concat
-                    else :
-                        sample_output  = torch.cat((sample_output,sample_output_frame),dim=0)
+                sample_input_tmp = sample_input_tmp.to(device)
+                # inference
+                #mask = model(sample_input_tmp)
+                #sample_output_frame  = sample_input_tmp[0,target_idx,context,:] * mask
+                sample_output_frame = model(sample_input_tmp)
+
+                output = model(input)
+                # init
+                if sample_output == None :
+                    sample_output = sample_output_frame
+                    #sample_mask = mask
+                # concat
+                else :
+                    sample_output  = torch.cat((sample_output,sample_output_frame),dim=0)
+                    #sample_mask = torch.cat((sample_mask,mask),dim=0)
 
             writer.log_MFCC(sample_input[0][0],'noisy',step)
-            writer.log_MFCC(sample_input[0][1],'estimated',step)
-            writer.log_MFCC(sample_output[0],'enhanced',step)
+            writer.log_MFCC(sample_input[0][1],'estim',step)
+            #writer.log_Mask(sample_mask,'mask',step)
+            writer.log_MFCC(sample_output,'enhanced',step)
+            writer.log_MFCC(sample_clean,'clean',step)
+
+            torch.save(model.state_dict(), str(modelsave_path)+'/s'+str(step)+'_l'+str(test_loss)+'.pt')
 
             if best_loss > test_loss:
                 torch.save(model.state_dict(), str(modelsave_path)+'/bestmodel.pt')
